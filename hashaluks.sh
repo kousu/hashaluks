@@ -99,8 +99,9 @@ catch() {
   # catch cmd2 &&
   # catch cmd3
   #
-  # You could also do
+  # You could also use '|| exit 1' after the subshell, for example:
   # cmd1 | catch cmd2 || exit 1
+  #	VAR=$(catch cmd1) || exit 1
   
   #echo "[catch]: running '$@'" >/dev/stderr #DEBUG
   if ! $@; then
@@ -115,7 +116,11 @@ diskid() {
 	# TODO: memoize this because it's a nuisance it has to be run twice
 	#DISKIMG=$1; shift
 	#echo "diskid($DISKIMG)" >/dev/stderr #DEBUG
-	cryptsetup luksUUID "${DISKIMG}" 2>/dev/null
+	DISKID=$(cryptsetup luksUUID "${DISKIMG}" 2>/dev/null)
+	if [ -z $DISKID ]; then
+		echo "${DISKIMG} does not appear to be a LUKS disk. You need to 'hashaluks format ${DISKIMG}' to use this file as an encrypted disk." >/dev/stderr
+		return 1 #signal error
+	fi
 }
 
 
@@ -172,7 +177,7 @@ format() {
 	# setting a dummy password and then changing it.
 	echo "password" | catch cryptsetup luksFormat --cipher twofish "${DISKIMG}" || exit 1
 	
-	DISKID=$(diskid) #NOTE: no error checking here; assuming that a successful `cryptsetup lukesFormat` always writes a DISKID
+	DISKID=$(catch diskid) || exit 1
 	KEY=$(hashapass -s ${DISKID}) &&
 	#echo "KEY="$KEY >/dev/stderr && #DEBUG
 	(echo password; echo $KEY) | cryptsetup luksChangeKey ${DISKIMG} &&  #subtley: the subshell "(..)" effectively lets us pipe two lines into cryptsetup instead of just one
@@ -208,11 +213,7 @@ mount() {
 	#DISKIMG=$1; shift
 	#echo "mount($DISKIMG)" >/dev/stderr #DEBUG
 
-	DISKID=$(diskid)
-	if [ -z $DISKID ]; then
-		echo "${DISKIMG} does not appear to be a LUKS disk. You need to 'hashaluks format ${DISKIMG}' to use this file as an encrypted disk."
-		exit 1
-	fi
+	DISKID=$(catch diskid) || exit 1
 	
 	KEY=$(hashapass -s ${DISKID}) &&
 	#echo "KEY="$KEY >/dev/stderr && #DEBUG
@@ -229,13 +230,9 @@ umount() {
 	#DISKIMG=$1; shift
 	#echo "umount($DISKIMG)" >/dev/stderr #DEBUG
 	
-	DISKID=$(diskid)
-	if [ -z $DISKID ]; then
-		echo "${DISKIMG} does not appear to be a LUKS disk. You need to 'hashaluks format ${DISKIMG}' to use this file as an encrypted disk."
-		exit 1
-	fi
-	
 	catch sudo umount "${MNT}"
+	
+	DISKID=$(catch diskid) || exit 1
 	catch sudo cryptsetup close $DISKID
 	
 	rmdir "${MNT}" #again, it's not a disaster if this fails
