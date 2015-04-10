@@ -15,7 +15,7 @@
 #  bash(?)
 
 # TODO:
-# [ ] better error checking / recovery (: we should delete things when we break!)
+# [/] better error checking / recovery (: we should delete things when we break!)
 #  [ ] what happens if the image has unmounted but not cryptsetup closed?
 #  [ ] if we ask cryptsetup what it has mounted before the attempt, we can skip hashapass'ing on double-mounts
 #  [/] what happens if we format a mounted drive? (cryptsetup lets us do this :S :S. it even appears to sort of be working with two separate filesystems. but i'm sure this is just the kernel cache hiding the massive corruption underneath)
@@ -28,13 +28,17 @@
 # [ ] for compat with regular mount, make sure you can do
 #   [ ] "hashaluks mount disk.img /path/to/mountpoint" #<-- this one is easy; but the second is harder
 #   [ ] "hashaluks umount disk.img.mnt/"
-# [ ] remove the dependency on xclip, by fixing the bug in hashapass
+# [x] remove the dependency on xclip, by fixing the bug in hashapass
 # [ ] test against non-bash shells
 # [ ] pull the baskets.img assumption out to wrapper scripts.
+# [ ] rename to hluks
+# [ ] auto-sudo
 # [ ] allow size-suffixes
-# [ ] the various initialization parameters are hardcoded. is this a bug or a feature?
 # [ ] is there a TOCTOU between the time we set the password once and then again?
 # [ ] factor the common bits; format and mount share a *lot* of code
+# [ ] the various initialization parameters are hardcoded. is this a bug or a feature?
+# [ ] this was written on ArchLinux. It's probbbbably got some portability issues.
+# [ ] use bash's default-value syntax instead of my verbose if's
 
 ## Argument parsing
 
@@ -66,14 +70,39 @@ MNT="${DISKIMG}.mnt"
 
 
 ## Subroutines
-# warning: these are supppper side-effecty 
+
+catch() {
+  # run a command and catch all its error codes into fatal errors
+  # this makes bash *almost* have proper exceptions
+  #
+  # You should still write your code with liberal use of &&'s as 'exit'
+  # only kills the current (sub)shell, and pipelines implicitly build subshells
+  # for example,
+  #   `cat hashaluks.sh | catch grep zoot`    will *not* exit (because
+  #                                           catch is being run as part
+  #                                           of the pipeline's subshell)
+  #   `catch "cat hashaluks.sh | grep zoot"`  will
+  # So to keep things simple, just always follow this pattern:
+  # catch cmd1 &&
+  # catch cmd2 &&
+  # catch cmd3
+  #
+  # You could also do
+  # cmd1 | catch cmd2 || exit 1
+  
+  #echo "[catch]: running '$@'" >/dev/stderr #DEBUG
+  if ! $@; then
+	  #echo "Unable to '$@'" >/dev/stderr #DEBUG
+    exit 1
+  fi
+}
 
 
 diskid() {
 	# read the LUKS UUID off of DISKIMG 
 	# TODO: memoize this because it's a nuisance it has to be run twice
 	#DISKIMG=$1; shift
-	echo "diskid($DISKIMG)" >/dev/stderr #DEBUG
+	#echo "diskid($DISKIMG)" >/dev/stderr #DEBUG
 	cryptsetup luksUUID "${DISKIMG}" 2>/dev/null
 }
 
@@ -82,46 +111,42 @@ diskid() {
 
 create() {
   #DISKIMG=$1; shift
-	echo "create($DISKIMG)" >/dev/stderr #DEBUG
+	#echo "create($DISKIMG)" >/dev/stderr #DEBUG
 	
 	read -p "$DISKIMG not found. To create, enter a non-zero size (in KiB): [0] " SIZE
 	if [ -z $SIZE ]; then
-		SIZE=0
+		SIZE=0 #default value
 	fi
 
-	if [ $SIZE -gt 0 ]; then
-	
-	  # warn users about tiny disks
-	  if [ $SIZE -lt 2400 ]; then
-	    read -p "Sizes less than 2400KiB tend to run into glitches in loop(8), cryptsetup, and ext4. Continue? [y/N] " C
-	    if [ -z $C ]; then C=N; fi #we have to do this or else the if on the next line *parses wrong* because bash is made of evals ugh
-	    if [ $C == "y" -o $C == "Y" ]; then
-	      #pass
-	      echo -n
-	    else
-	      exit 0
-	    fi
-	  fi
+  # warn users about tiny disks
+	if [ $SIZE -gt 0 -a $SIZE -lt 2400  ]; then
+    read -p "Sizes less than 2400KiB tend to run into glitches in loop(8), cryptsetup, and ext4. Continue? [y/N] " C
+    if [ -z $C ]; then C=N; fi #we have to do this or else the if on the next line *parses wrong* because bash is made of evals ugh
+    if [ $C == "y" -o $C == "Y" ]; then
+      #pass
+      echo -n
+    else
+      SIZE=0
+    fi
+  fi
 	  
-	  # actually create the file 
-		echo "creating ${SIZE}KiB disk image $DISKIMG" >/dev/stderr #DEBUG
-		if ! dd if=/dev/zero of=${DISKIMG} bs=1K count="${SIZE}"; then
-			echo "Unable to create ${DISKIMG}"
-			exit 1
-		fi
+  # actually create the file 
+	if [ $SIZE -gt 0 ]; then
+		#echo "creating ${SIZE}KiB disk image $DISKIMG" >/dev/stderr #DEBUG
+		catch dd if=/dev/zero of=${DISKIMG} bs=1K count="${SIZE}"
+		catch chmod 600 ${DISKIMG}  # give only the owner permissions (secure by default!)
 	else
-		echo "No size entered; not creating disk image" >/dev/stderr #DEBUG
-		exit 0   #XXX I'm not sure about this. This exit might bite me later on.
+		exit 0 #XXX I'm not sure about this. This exit might bite me later on.
 	fi
 }
 
 format() {
 	#DISKIMG=$1; shift
-	echo "format($DISKIMG)" >/dev/stderr #DEBUG
+	#echo "format($DISKIMG)" >/dev/stderr #DEBUG
 	
 	# create the image, if needed
 	if [ ! -e $DISKIMG ]; then
-	  create
+	  catch create
 	fi
 	
 	# try to close a previous
@@ -133,49 +158,42 @@ format() {
 	# we use the LUKS UUID as the hashapass parameter, so we need to
 	# set the key *after* the luks container has been made, which means
 	# setting a dummy password and then changing it.
-	if ! echo "password" | cryptsetup luksFormat --cipher twofish "${DISKIMG}"; then
-		echo "Unable to LUKS-format ${DISKIMG}" >/dev/stderr
-		exit 1
-	fi
+	echo "password" | catch cryptsetup luksFormat --cipher twofish "${DISKIMG}" || exit 1
 	
 	DISKID=$(diskid) #NOTE: no error checking here; assuming that a successful `cryptsetup lukesFormat` always writes a DISKID
 	KEY=$(hashapass -s ${DISKID}) &&
-	echo "KEY="$KEY >/dev/stderr &&
+	#echo "KEY="$KEY >/dev/stderr && #DEBUG
 	(echo password; echo $KEY) | cryptsetup luksChangeKey ${DISKIMG} &&  #subtley: the subshell "(..)" effectively lets us pipe two lines into cryptsetup instead of just one
-	echo "successfully changed luks key" #DEBUG
+	#echo "successfully changed luks key" >/dev/stderr #DEBUG
 	
-	echo sudo cryptsetup open --type luks "${DISKIMG}" "${DISKID}" >/dev/stderr #DEBUG
-	if ! echo ${KEY} | sudo cryptsetup open --type luks "${DISKIMG}" "${DISKID}"; then
-	  echo "Unable to cryptsetup open ${DISKIMG}"
-	  exit 1
-	fi
+	#echo sudo open --type luks "${DISKIMG}" "${DISKID}" >/dev/stderr #DEBUG
+  echo ${KEY} | catch sudo cryptsetup open --type luks "${DISKIMG}" "${DISKID}" || exit 1
 	
 	# mkfs
-	read -p "Enter new filesystem label: " LABEL &&
-	echo "successfully read LABEL: $LABEL" && #DEBUG 
-	if ! sudo mkfs.ext4 -L ${LABEL} /dev/mapper/$DISKID; then
-		echo "Unable to create filesystem." 
-		exit 1
-	fi  #<--note that we mkfs on the mapped device, not the file. the kernel lets you but gets confused if you try the other way.  
-	echo "successfully formatted" #DEBUG
+	read -p "Enter new filesystem label: " LABEL
+	#echo "successfully read LABEL: $LABEL" >/dev/stderr #DEBUG 
+	catch sudo mkfs.ext4 -L ${LABEL} /dev/mapper/$DISKID #<--note that we mkfs on the mapped device
+	                                                     #   not the file. the kernel lets you do either
+	                                                     #   but gets unapologetically confused on the other
+	#echo "successfully formatted" >/dev/stderr #DEBUG
 	
-	# set up default permissions
+	# set up default permissions to be usable
 	if [ ! -d ${MNT} ]; then
-		mkdir ${MNT};
-	fi &&
-	sudo mount /dev/mapper/$DISKID ${MNT} &&
-	sudo chgrp -R users ${MNT} &&
-	sudo chmod -R g+w ${MNT} &&
-	(echo "Successfully initialized new drive's permissions:" && ls -ld ${MNT}) >/dev/stderr && #DEBUG
-	sudo umount ${MNT} &&
-	sudo cryptsetup close "${DISKID}"
+		catch mkdir ${MNT};
+	fi
+	catch sudo mount /dev/mapper/$DISKID ${MNT}
+	catch sudo chgrp -R users ${MNT}
+	catch sudo chmod -R g+w ${MNT}
+	#(echo "Successfully initialized new drive's permissions:" && ls -ld ${MNT}) >/dev/stderr && #DEBUG
+	catch sudo umount ${MNT}
+	catch sudo cryptsetup close "${DISKID}"
 	
 	rmdir ${MNT} # it is alright if this one fails
 }
 
 mount() {
 	#DISKIMG=$1; shift
-	echo "mount($DISKIMG)" >/dev/stderr #DEBUG
+	#echo "mount($DISKIMG)" >/dev/stderr #DEBUG
 
 	DISKID=$(diskid)
 	if [ -z $DISKID ]; then
@@ -183,21 +201,20 @@ mount() {
 		exit 1
 	fi
 	
-	KEY=$(hashapass -s ${DISKID})
-	if ! echo ${KEY} | sudo cryptsetup open --type luks "${DISKIMG}" "${DISKID}"; then
-	  echo "Unable to cryptsetup open ${DISKIMG}"
-	  exit 1
-	fi
-  
+	KEY=$(hashapass -s ${DISKID}) &&
+	#echo "KEY="$KEY >/dev/stderr && #DEBUG
+	echo ${KEY} | catch sudo cryptsetup open --type luks "${DISKIMG}" "${DISKID}" || exit 1
+	
   if [ ! -d ${MNT} ]; then
 		mkdir ${MNT};
-	fi
-	sudo mount /dev/mapper/$DISKID ${MNT}
+	fi &&
+	catch sudo mount /dev/mapper/$DISKID ${MNT}
 }
+
 
 umount() {
 	#DISKIMG=$1; shift
-	echo "umount($DISKIMG)" >/dev/stderr #DEBUG
+	#echo "umount($DISKIMG)" >/dev/stderr #DEBUG
 	
 	DISKID=$(diskid)
 	if [ -z $DISKID ]; then
@@ -205,20 +222,23 @@ umount() {
 		exit 1
 	fi
 	
-	sudo umount "${MNT}" &&
-	if ! sudo cryptsetup close $DISKID; then
-	  echo "Unable to cryptsetup close ${DISKIMG}"
-	  exit 1
-	fi &&
-	rmdir "${MNT}"
+	catch sudo umount "${MNT}"
+	catch sudo cryptsetup close $DISKID
+	
+	rmdir "${MNT}" #again, it's not a disaster if this fails
 }
 
-if [ $CMD == "mount" ]; then
-  mount
-elif [ $CMD == "umount" ]; then
-  umount
-elif [ $CMD == "format" ]; then
-  format
-else
-  usage
-fi
+
+main() {
+  if [ $CMD == "mount" ]; then
+    mount
+  elif [ $CMD == "umount" ]; then
+    umount
+  elif [ $CMD == "format" ]; then
+    format
+  else
+    usage
+  fi
+}
+
+main
