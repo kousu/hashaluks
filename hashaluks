@@ -75,44 +75,49 @@ diskid() {
 
 ## Subcommands
 
+create() {
+  #DISKIMG=$1; shift
+	echo "create($DISKIMG)" >/dev/stderr #DEBUG
+	
+	read -p "$DISKIMG not found. To create, enter a non-zero size (in KiB): [0] " SIZE
+	if [ -z $SIZE ]; then
+		SIZE=0
+	fi
+
+	if [ $SIZE -gt 0 ]; then
+	
+	  # warn users about tiny disks
+	  if [ $SIZE -lt 2400 ]; then
+	    read -p "Sizes less than 2400KiB tend to run into glitches in loop(8), cryptsetup, and ext4. Continue? [y/N] " C
+	    if [ -z $C ]; then C=N; fi #we have to do this or else the if on the next line *parses wrong* because bash is made of evals ugh
+	    if [ $C = "y" -o $C = "Y" ]; then
+	      #pass
+	      echo -n
+	    else
+	      exit 0
+	    fi
+	  fi
+	  
+	  # actually create the file 
+		echo "creating ${SIZE}KiB disk image $DISKIMG" >/dev/stderr #DEBUG
+		if ! dd if=/dev/zero of=${DISKIMG} bs=1K count="${SIZE}"; then
+			echo "Unable to create ${DISKIMG}"
+			exit 1
+		fi
+	else
+		echo "No size entered; not creating disk image" >/dev/stderr #DEBUG
+		exit 0   #XXX I'm not sure about this. This exit might bite me later on.
+	fi
+}
+
 format() {
 	#DISKIMG=$1; shift
 	echo "format($DISKIMG)" >/dev/stderr #DEBUG
 	
 	# create the image, if needed
 	if [ ! -e $DISKIMG ]; then
-		read -p "$DISKIMG not found. To create, enter a non-zero size (in KiB): [0] " SIZE
-		if [ -z $SIZE ]; then
-			SIZE=0
-		fi
-
-		if [ $SIZE -gt 0 ]; then
-		
-		  # warn users about tiny disks
-		  if [ $SIZE -lt 2400 ]; then
-		    read -p "Sizes less than 2400KiB tend to run into glitches in loop(8), cryptsetup, and ext4. Continue? [y/N] " C
-		    if [ -z $C ]; then C=N; fi #we have to do this or else the if on the next line *parses wrong* because bash is made of evals ugh
-		    if [ $C = "y" -o $C = "Y" ]; then
-		      #pass
-		      echo -n
-		    else
-		      exit 0
-		    fi
-		  fi
-		  
-		  # create 
-			echo "creating ${SIZE}KiB disk image $DISKIMG" >/dev/stderr #DEBUG
-			if ! dd if=/dev/zero of=${DISKIMG} bs=1K count="${SIZE}"; then
-				echo "Unable to create ${DISKIMG}"
-				exit 1
-			fi
-		else
-			echo "No size entered; not creating disk image" >/dev/stderr #DEBUG
-			exit 0   #XXX I'm not sure about this. This exit might bite me later on.
-		fi
+	  create
 	fi
-	
-	
 	
 	# set the disk image password
 	#  (actually, the password for the LUKS master password, but in
@@ -161,14 +166,32 @@ format() {
 }
 
 mount() {
+	#DISKIMG=$1; shift
+	echo "mount($DISKIMG)" >/dev/stderr #DEBUG
 
-	KEY=$(hashakey $DISKIMAGE)
+	DISKID=$(diskid)
+	if [ -z $DISKID ]; then
+		echo "${DISKIMG} does not appear to be a LUKS disk. You need to 'hashaluks format ${DISKIMG}' to use this file as an encrypted disk."
+		exit 1
+	fi
 	
-	echo ${KEY} | sudo cryptsetup open --type luks $DISKIMG $DISKID
-
+	KEY=$(hashapass -s ${DISKID})
+	if ! echo ${KEY} | sudo cryptsetup open --type luks "${DISKIMG}" "${DISKID}"; then
+	  echo "Unable to cryptsetup open ${DISKIMG}"
+	  exit 1
+	fi
+  
+  if [ ! -d ${MNT} ]; then
+		mkdir ${MNT};
+	fi
+	sudo mount /dev/mapper/$DISKID ${MNT}
 }
 
 umount() {
+	#DISKIMG=$1; shift
+	echo "umount($DISKIMG)" >/dev/stderr #DEBUG
+	exit 4
+	
 	sudo umount "${MNT}" &&
 	sudo cryptsetup close $DISKID
 	rmdir "${MNT}"
