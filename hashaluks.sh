@@ -20,11 +20,14 @@
 #  [ ] if we ask cryptsetup what it has mounted before the attempt, we can skip hashapass'ing on double-mounts
 #  [/] what happens if we format a mounted drive? (cryptsetup lets us do this :S :S. it even appears to sort of be working with two separate filesystems. but i'm sure this is just the kernel cache hiding the massive corruption underneath)
 #    [ ] instead of closing a previous mount, we should probably detect and bail
-# [ ] arrange so that the sudo password is only given once (privsep??)
-#   [ ] this script *could* use sudo in its shebang (or equivalently sudo itself as a first step)
-#       but I'm loath to do this because on my particular hashapass is only installed to my local
+# [ ] arrange so that the sudo password is only given once
+#   [ ] fork a privsep'd helper??
+#   [-] auto-sudo: use sudo in its shebang (or equivalently sudo itself as a first step)
+#     sudo helpfully preserves paths (yay) but it doesn't preserve $USER or umask (obviously, that's the point)
+#     so it is a bad idea to do this because it ruins create() in subtle ways
+#     maybe it would be okay to auto-sudo iff we do not need to create(), but this is awkward to code, so it's on hold for now 
 # [ ] pass args instead of globals to mount() and unmount()
-# [ ] test that partition targets actually work
+# [ ] test that partition and raw disk targets actually work
 # [ ] for compat with regular mount, make sure you can do
 #   [ ] "hashaluks mount disk.img /path/to/mountpoint" #<-- this one is easy; but the second is harder
 #   [ ] "hashaluks umount disk.img.mnt/"
@@ -32,13 +35,22 @@
 # [ ] test against non-bash shells
 # [ ] pull the baskets.img assumption out to wrapper scripts.
 # [ ] rename to hluks
-# [ ] auto-sudo
 # [ ] allow size-suffixes
 # [ ] is there a TOCTOU between the time we set the password once and then again?
 # [ ] factor the common bits; format and mount share a *lot* of code
 # [ ] the various initialization parameters are hardcoded. is this a bug or a feature?
 # [ ] this was written on ArchLinux. It's probbbbably got some portability issues.
 # [ ] use bash's default-value syntax instead of my verbose if's
+
+## auto-sudo:
+## make sure all commands below run as root. 
+## (this assumes that sudo preserves $PATH, since most people (i.e. me, who else?)
+##  aren't going to have hashapass installed to their system PATH)
+#if [ ! $EUID -eq 0 ]; then
+#  echo "auto-sudo" > /dev/stderr
+#  sudo $0 $@
+#  exit $?
+#fi
 
 ## Argument parsing
 
@@ -182,8 +194,9 @@ format() {
 		catch mkdir ${MNT};
 	fi
 	catch sudo mount /dev/mapper/$DISKID ${MNT}
+	catch sudo chown -R $USER ${MNT}
 	catch sudo chgrp -R users ${MNT}
-	catch sudo chmod -R g+w ${MNT}
+	catch sudo chmod -R 700 ${MNT} #again, only the user has access. tho we also tweak the group to the standard one everyone is in to make it 
 	#(echo "Successfully initialized new drive's permissions:" && ls -ld ${MNT}) >/dev/stderr && #DEBUG
 	catch sudo umount ${MNT}
 	catch sudo cryptsetup close "${DISKID}"
