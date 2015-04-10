@@ -90,7 +90,7 @@ create() {
 	  if [ $SIZE -lt 2400 ]; then
 	    read -p "Sizes less than 2400KiB tend to run into glitches in loop(8), cryptsetup, and ext4. Continue? [y/N] " C
 	    if [ -z $C ]; then C=N; fi #we have to do this or else the if on the next line *parses wrong* because bash is made of evals ugh
-	    if [ $C = "y" -o $C = "Y" ]; then
+	    if [ $C == "y" -o $C == "Y" ]; then
 	      #pass
 	      echo -n
 	    else
@@ -205,11 +205,11 @@ umount() {
 	rmdir "${MNT}"
 }
 
-if [ $CMD = "mount" ]; then
+if [ $CMD == "mount" ]; then
   mount
-elif [ $CMD = "umount" ]; then
+elif [ $CMD == "umount" ]; then
   umount
-elif [ $CMD = "format" ]; then
+elif [ $CMD == "format" ]; then
   format
 else
   usage
