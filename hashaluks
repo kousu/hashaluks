@@ -140,7 +140,7 @@ format() {
 	
 	DISKID=$(diskid) #NOTE: no error checking here; assuming that a successful `cryptsetup lukesFormat` always writes a DISKID
 	KEY=$(hashapass -s ${DISKID}) &&
-	(echo; echo "KEY="$KEY) >/dev/stderr &&
+	echo "KEY="$KEY >/dev/stderr &&
 	(echo password; echo $KEY) | cryptsetup luksChangeKey ${DISKIMG} &&  #subtley: the subshell "(..)" effectively lets us pipe two lines into cryptsetup instead of just one
 	echo "successfully changed luks key" #DEBUG
 	
