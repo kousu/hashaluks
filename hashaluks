@@ -17,7 +17,12 @@
 # TODO:
 # [ ] better error checking / recovery (: we should delete things when we break!)
 #  [ ] what happens if the image has unmounted but not cryptsetup closed?
+#  [ ] if we ask cryptsetup what it has mounted before the attempt, we can skip hashapass'ing on double-mounts
+#  [/] what happens if we format a mounted drive? (cryptsetup lets us do this :S :S. it even appears to sort of be working with two separate filesystems. but i'm sure this is just the kernel cache hiding the massive corruption underneath)
+#    [ ] instead of closing a previous mount, we should probably detect and bail
 # [ ] arrange so that the sudo password is only given once (privsep??)
+#   [ ] this script *could* use sudo in its shebang (or equivalently sudo itself as a first step)
+#       but I'm loath to do this because on my particular hashapass is only installed to my local
 # [ ] pass args instead of globals to mount() and unmount()
 # [ ] test that partition targets actually work
 # [ ] for compat with regular mount, make sure you can do
@@ -118,6 +123,9 @@ format() {
 	if [ ! -e $DISKIMG ]; then
 	  create
 	fi
+	
+	# try to close a previous
+	(umount 2>&1 >/dev/null)
 	
 	# set the disk image password
 	#  (actually, the password for the LUKS master password, but in
