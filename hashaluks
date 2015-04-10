@@ -130,7 +130,7 @@ format() {
 		exit 1
 	fi
 	
-	DISKID=$(diskid)
+	DISKID=$(diskid) #NOTE: no error checking here; assuming that a successful `cryptsetup lukesFormat` always writes a DISKID
 	KEY=$(hashapass -s ${DISKID}) &&
 	(echo; echo "KEY="$KEY) >/dev/stderr &&
 	(echo password; echo $KEY) | cryptsetup luksChangeKey ${DISKIMG} &&  #subtley: the subshell "(..)" effectively lets us pipe two lines into cryptsetup instead of just one
@@ -190,10 +190,18 @@ mount() {
 umount() {
 	#DISKIMG=$1; shift
 	echo "umount($DISKIMG)" >/dev/stderr #DEBUG
-	exit 4
+	
+	DISKID=$(diskid)
+	if [ -z $DISKID ]; then
+		echo "${DISKIMG} does not appear to be a LUKS disk. You need to 'hashaluks format ${DISKIMG}' to use this file as an encrypted disk."
+		exit 1
+	fi
 	
 	sudo umount "${MNT}" &&
-	sudo cryptsetup close $DISKID
+	if ! sudo cryptsetup close $DISKID; then
+	  echo "Unable to cryptsetup close ${DISKIMG}"
+	  exit 1
+	fi &&
 	rmdir "${MNT}"
 }
 
